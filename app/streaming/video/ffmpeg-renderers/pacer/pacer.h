@@ -44,6 +44,11 @@ public:
 
     void renderOnMainThread();
 
+    // SDL_GetTicks() of the last frame actually rendered, read by the stall watchdog in Session
+    static SDL_atomic_t s_LastRenderTicks;
+    // Non-zero while the renderer is inside renderFrame()
+    static SDL_atomic_t s_RenderInProgress;
+
 private:
     static int vsyncThread(void* context);
 

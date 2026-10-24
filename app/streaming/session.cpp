@@ -1,4 +1,7 @@
 #include "session.h"
+
+// How long without a rendered video frame before the decoder is reset
+#define VIDEO_STALL_RESET_MS 4000
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
@@ -1977,7 +1980,36 @@ void Session::exec()
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
+#ifdef HAVE_FFMPEG
+    SDL_AtomicSet(&Pacer::s_LastRenderTicks, (int)SDL_GetTicks());
+#endif
     for (;;) {
+#ifdef HAVE_FFMPEG
+        // Video stall watchdog: the host (Sunshine) keeps sending frames even for a static
+        // picture, so no rendered frame for several seconds means the video path is wedged
+        // while audio/input may still work. Reuse the existing decoder reset path (new decoder + IDR).
+        // shortcut: if the render thread is hung inside a driver call we only log it; recovering that needs a process restart.
+        {
+            Uint32 now = SDL_GetTicks();
+            if ((int)(now - (Uint32)SDL_AtomicGet(&Pacer::s_LastRenderTicks)) > VIDEO_STALL_RESET_MS) {
+                SDL_AtomicSet(&Pacer::s_LastRenderTicks, (int)now); // also rate-limits resets
+                if (SDL_AtomicGet(&Pacer::s_RenderInProgress)) {
+                    // Deleting the decoder would join the stuck render thread and freeze input too
+                    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                                 "Renderer stuck in a frame for %d ms; not resetting (restart the stream)",
+                                 VIDEO_STALL_RESET_MS);
+                }
+                else {
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                "No video frame rendered for %d ms; resetting decoder",
+                                VIDEO_STALL_RESET_MS);
+                    SDL_Event resetEvent = {};
+                    resetEvent.type = SDL_RENDER_DEVICE_RESET;
+                    SDL_PushEvent(&resetEvent);
+                }
+            }
+        }
+#endif
 #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
         // SDL 2.0.18 has a proper wait event implementation that uses platform
         // support to block on events rather than polling on Windows, macOS, X11,

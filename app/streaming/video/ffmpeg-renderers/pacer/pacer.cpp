@@ -29,6 +29,9 @@ static_assert(PACER_MAX_OUTSTANDING_FRAMES == MAX_QUEUED_FRAMES + 2,
 // V-sync happens.
 #define TIMER_SLACK_MS 3
 
+SDL_atomic_t Pacer::s_LastRenderTicks;
+SDL_atomic_t Pacer::s_RenderInProgress;
+
 Pacer::Pacer(IFFmpegRenderer* renderer, PVIDEO_STATS videoStats) :
     m_RenderThread(nullptr),
     m_VsyncThread(nullptr),
@@ -344,11 +347,14 @@ void Pacer::renderFrame(AVFrame* frame)
     m_VideoStats->totalPacerTimeUs += (beforeRender - (uint64_t)frame->pkt_dts);
 
     // Render it
+    SDL_AtomicSet(&s_RenderInProgress, 1);
     m_VsyncRenderer->renderFrame(frame);
+    SDL_AtomicSet(&s_RenderInProgress, 0);
     uint64_t afterRender = LiGetMicroseconds();
 
     m_VideoStats->totalRenderTimeUs += (afterRender - beforeRender);
     m_VideoStats->renderedFrames++;
+    SDL_AtomicSet(&s_LastRenderTicks, (int)SDL_GetTicks());
 
     // Wait until after next frame to free this one to ensure the GPU
     // doesn't stall or read garbage if the backing buffer gets returned
